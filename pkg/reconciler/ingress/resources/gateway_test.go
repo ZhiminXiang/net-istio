@@ -256,7 +256,7 @@ func TestMakeTLSServers(t *testing.T) {
 	}}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			servers, err := MakeTLSServers(c.ci, c.gatewayServiceNamespace, c.originSecrets)
+			servers, _, err := MakeTLSServers(c.ci, c.gatewayServiceNamespace, c.originSecrets)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("Test: %s; MakeServers error = %v, WantErr %v", c.name, err, c.wantErr)
 			}

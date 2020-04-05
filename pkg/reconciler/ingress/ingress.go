@@ -116,19 +116,7 @@ func (r *Reconciler) reconcileIngress(ctx context.Context, ing *v1alpha1.Ingress
 	ing.Status.InitializeConditions()
 	logger.Infof("Reconciling ingress: %#v", ing)
 
-	gatewayNames := qualifiedGatewayNamesFromContext(ctx)
-	vses, err := resources.MakeVirtualServices(ing, gatewayNames)
-	if err != nil {
-		return err
-	}
-
-	// First, create the VirtualServices.
-	logger.Infof("Creating/Updating VirtualServices")
-	ing.Status.ObservedGeneration = ing.GetGeneration()
-	if err := r.reconcileVirtualServices(ctx, ing, vses); err != nil {
-		ing.Status.MarkLoadBalancerFailed(virtualServiceNotReconciled, err.Error())
-		return err
-	}
+	wildcardGatewayNames := []string{}
 	if r.shouldReconcileTLS(ing) {
 		originSecrets, err := resources.GetSecrets(ing, r.secretLister)
 		if err != nil {
@@ -154,8 +142,9 @@ func (r *Reconciler) reconcileIngress(ctx context.Context, ing *v1alpha1.Ingress
 			if err := r.reconcileIngressServers(ctx, ing, gw, desiredIngressServers); err != nil {
 				return err
 			}
-			if err := r.reconcileWildcardServers(ctx, ing, gw, desiredWildcardServers); err != nil {
-				return err
+			if len(desiredWildcardServers) != 0 {
+				wildcardGateway := makeWildcardGateway(ing.Namespace, desiredWildcardServers, gw)
+
 			}
 		}
 	}
@@ -173,6 +162,20 @@ func (r *Reconciler) reconcileIngress(ctx context.Context, ing *v1alpha1.Ingress
 	}
 	// Update status
 	ing.Status.MarkNetworkConfigured()
+
+	gatewayNames := qualifiedGatewayNamesFromContext(ctx)
+	vses, err := resources.MakeVirtualServices(ing, gatewayNames)
+	if err != nil {
+		return err
+	}
+
+	// First, create the VirtualServices.
+	logger.Infof("Creating/Updating VirtualServices")
+	ing.Status.ObservedGeneration = ing.GetGeneration()
+	if err := r.reconcileVirtualServices(ctx, ing, vses); err != nil {
+		ing.Status.MarkLoadBalancerFailed(virtualServiceNotReconciled, err.Error())
+		return err
+	}
 
 	ready, err := r.statusManager.IsReady(ctx, ing)
 	if err != nil {
@@ -306,17 +309,6 @@ func (r *Reconciler) reconcileIngressServers(ctx context.Context, ing *v1alpha1.
 		return fmt.Errorf("failed to get Gateway: %w", err)
 	}
 	existing := resources.GetServers(gateway, ing)
-	return r.reconcileGateway(ctx, ing, gateway, existing, desired)
-}
-
-func (r *Reconciler) reconcileWildcardServers(ctx context.Context, ing *v1alpha1.Ingress, gw config.Gateway, desired []*istiov1alpha3.Server) error {
-	gateway, err := r.gatewayLister.Gateways(gw.Namespace).Get(gw.Name)
-	if err != nil {
-		// Unlike VirtualService, a default gateway needs to be existent.
-		// It should be installed when installing Knative.
-		return fmt.Errorf("failed to get Gateway: %w", err)
-	}
-	existing := resources.GetExistingServers(gateway, desired)
 	return r.reconcileGateway(ctx, ing, gateway, existing, desired)
 }
 
