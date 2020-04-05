@@ -131,8 +131,9 @@ func secretKey(tls v1alpha1.IngressTLS) string {
 	return fmt.Sprintf("%s/%s", tls.SecretNamespace, tls.SecretName)
 }
 
+// CategorizeSecrets categorizes secrets into two sets: wildcard cert secrets and non-wildcard cert secrets.
 func CategorizeSecrets(secrets map[string]*corev1.Secret) (map[string]*corev1.Secret, map[string]*corev1.Secret, error) {
-	ingressSecrets := map[string]*corev1.Secret{}
+	nonWildcardSecrets := map[string]*corev1.Secret{}
 	wildcardSecrets := map[string]*corev1.Secret{}
 	for k, secret := range secrets {
 		isWildcard, err := isWildcardSecret(secret)
@@ -142,10 +143,10 @@ func CategorizeSecrets(secrets map[string]*corev1.Secret) (map[string]*corev1.Se
 		if isWildcard {
 			wildcardSecrets[k] = secret
 		} else {
-			ingressSecrets[k] = secret
+			nonWildcardSecrets[k] = secret
 		}
 	}
-	return ingressSecrets, wildcardSecrets, nil
+	return nonWildcardSecrets, wildcardSecrets, nil
 }
 
 func isWildcardSecret(secret *corev1.Secret) (bool, error) {
@@ -164,6 +165,7 @@ func isWildcardHost(domain string) (bool, error) {
 	return splits[0] == "*", nil
 }
 
+// GetHostsFromCertSecret gets cert hosts from cert secret.
 func GetHostsFromCertSecret(secret *corev1.Secret) ([]string, error) {
 	block, _ := pem.Decode(secret.Data[corev1.TLSCertKey])
 	if block == nil {

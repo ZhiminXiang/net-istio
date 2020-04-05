@@ -162,6 +162,8 @@ func GatewayName(accessor kmeta.Accessor, gatewaySvc *corev1.Service) string {
 	return fmt.Sprintf("%s-%d", accessor.GetName(), adler32.Checksum([]byte(gatewayServiceKey)))
 }
 
+// MakeWildcardGateways creates gateways with wildcard hosts based on the wildcard secret information.
+// For each public ingress service, we will create a list of Gateways. Each Gateway of the list corresponds to a wildcard cert secret.
 func MakeWildcardGateways(ctx context.Context, namespace string, wildcardSecrets map[string]*corev1.Secret, svcLister corev1listers.ServiceLister) ([]*v1alpha3.Gateway, error) {
 	gatewayServices, err := getGatewayServices(ctx, svcLister)
 	if err != nil {
