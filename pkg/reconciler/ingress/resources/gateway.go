@@ -162,8 +162,63 @@ func GatewayName(accessor kmeta.Accessor, gatewaySvc *corev1.Service) string {
 	return fmt.Sprintf("%s-%d", accessor.GetName(), adler32.Checksum([]byte(gatewayServiceKey)))
 }
 
+func MakeWildcardGateways(ctx context.Context, namespace string, wildcardSecrets map[string]*corev1.Secret, svcLister corev1listers.ServiceLister) ([]*v1alpha3.Gateway, error) {
+	gatewayServices, err := getGatewayServices(ctx, svcLister)
+	if err != nil {
+		return nil, err
+	}
+	gateways := []*v1alpha3.Gateway{}
+	for _, gatewayService := range gatewayServices {
+		gws, err := makeWildcardGateways(ctx, namespace, wildcardSecrets, gatewayService)
+		if err != nil {
+			return nil, err
+		}
+		gateways = append(gateways, gws...)
+	}
+	return gateways, nil
+}
+
+func makeWildcardGateways(ctx context.Context, namespace string, wildcardSecrets map[string]*corev1.Secret, gatewayService *corev1.Service) ([]*v1alpha3.Gateway, error) {
+	gateways := make([]*v1alpha3.Gateway, 0, len(wildcardSecrets))
+	for _, secret := range wildcardSecrets {
+		hosts, err := GetHostsFromCertSecret(secret)
+		if err != nil {
+			return nil, err
+		}
+		server := &istiov1alpha3.Server{
+			Hosts: hosts,
+			Port: &istiov1alpha3.Port{
+				Name:     secret.Name,
+				Number:   443,
+				Protocol: "HTTPS",
+			},
+			Tls: &istiov1alpha3.Server_TLSOptions{
+				Mode:              istiov1alpha3.Server_TLSOptions_SIMPLE,
+				ServerCertificate: corev1.TLSCertKey,
+				PrivateKey:        corev1.TLSPrivateKeyKey,
+				CredentialName:    secret.Name,
+			},
+		}
+		gateways = append(gateways, &v1alpha3.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				// TODO:- -------use a good name
+				Name:      namespace + "-" + gatewayService.Namespace + "-" + gatewayService.Name,
+				Namespace: namespace,
+			},
+			Spec: istiov1alpha3.Gateway{
+				Selector: gatewayService.Spec.Selector,
+				Servers:  []*istiov1alpha3.Server{server},
+			},
+		})
+	}
+	return gateways, nil
+}
+
 // MakeTLSServers creates the expected Gateway TLS `Servers` based on the given Ingress.
 func MakeTLSServers(ing *v1alpha1.Ingress, gatewayServiceNamespace string, originSecrets map[string]*corev1.Secret) ([]*istiov1alpha3.Server, error) {
+	if len(originSecrets) == 0 {
+		return []*istiov1alpha3.Server{}, nil
+	}
 	servers := make([]*istiov1alpha3.Server, len(ing.Spec.TLS))
 	// TODO(zhiminx): for the hosts that does not included in the IngressTLS but listed in the IngressRule,
 	// do we consider them as hosts for HTTP?
@@ -281,4 +336,12 @@ func UpdateGateway(gateway *v1alpha3.Gateway, want []*istiov1alpha3.Server, exis
 
 func isPlaceHolderServer(server *istiov1alpha3.Server) bool {
 	return equality.Semantic.DeepEqual(server, &placeholderServer)
+}
+
+func GetQualifiedGatewayNames(gateways []*v1alpha3.Gateway) []string {
+	result := make([]string, 0, len(gateways))
+	for _, gw := range gateways {
+		result = append(result, gw.Namespace+"/"+gw.Name)
+	}
+	return result
 }
