@@ -18,7 +18,10 @@ package resources
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,22 +63,65 @@ func MakeSecrets(ctx context.Context, originSecrets map[string]*corev1.Secret, a
 				// as the origin namespace
 				continue
 			}
-			secrets = append(secrets, makeSecret(originSecret, meta.Namespace, accessor))
+			isWildcard, err := isWildcardSecret(originSecret)
+			if err != nil {
+				return nil, err
+			}
+			if isWildcard {
+				// For wildcard certificate, the target secret is independent with Ingress so that it could be shared across Ingresses.
+				secrets = append(secrets, makeSecret(originSecret, originSecret.Name, meta.Namespace, map[string]string{}))
+			} else {
+				labels := MakeTargetSecretLabels(originSecret.Name, originSecret.Namespace)
+				secrets = append(secrets, makeSecret(originSecret, targetSecret(originSecret, accessor), meta.Namespace, labels))
+			}
 		}
 	}
 	return secrets, nil
 }
 
-func makeSecret(originSecret *corev1.Secret, targetNamespace string, accessor kmeta.OwnerRefableAccessor) *corev1.Secret {
+func makeSecret(originSecret *corev1.Secret, name, namespace string, labels map[string]string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      targetSecret(originSecret, accessor),
-			Namespace: targetNamespace,
-			Labels:    MakeTargetSecretLabels(originSecret.Name, originSecret.Namespace),
+			Name:      name,
+			Namespace: namespace,
+			Labels:    labels,
 		},
 		Data: originSecret.Data,
 		Type: originSecret.Type,
 	}
+}
+
+func isWildcardSecret(secret *corev1.Secret) (bool, error) {
+	hosts, err := GetHostsFromCertSecret(secret)
+	if err != nil {
+		return false, err
+	}
+	return IsWildcardHost(hosts[0])
+}
+
+// IsWildcardHost checks if a host is wildcard host (e.g. *.example.com).
+func IsWildcardHost(domain string) (bool, error) {
+	splits := strings.Split(domain, ".")
+	if len(splits) <= 1 {
+		return false, fmt.Errorf("incorrect domain format, got domain %s", domain)
+	}
+	return splits[0] == "*", nil
+}
+
+func GetHostsFromCertSecret(secret *corev1.Secret) ([]string, error) {
+	block, _ := pem.Decode(secret.Data[corev1.TLSCertKey])
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM data for secret %s/%s", secret.Namespace, secret.Name)
+	}
+
+	certData, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse certificate for secret %s/%s: %w", secret.Namespace, secret.Name, err)
+	}
+	if len(certData.DNSNames) == 0 {
+		return nil, fmt.Errorf("certificate should have DNS names, but it has %d", len(certData.DNSNames))
+	}
+	return certData.DNSNames, nil
 }
 
 // MakeTargetSecretLabels returns the labels used in target secret.

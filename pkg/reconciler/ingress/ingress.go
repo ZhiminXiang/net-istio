@@ -147,11 +147,14 @@ func (r *Reconciler) reconcileIngress(ctx context.Context, ing *v1alpha1.Ingress
 			if err != nil {
 				return err
 			}
-			desired, err := resources.MakeTLSServers(ing, ns, originSecrets)
+			desiredIngressServers, desiredWildcardServers, err := resources.MakeTLSServers(ing, ns, originSecrets)
 			if err != nil {
 				return err
 			}
-			if err := r.reconcileIngressServers(ctx, ing, gw, desired); err != nil {
+			if err := r.reconcileIngressServers(ctx, ing, gw, desiredIngressServers); err != nil {
+				return err
+			}
+			if err := r.reconcileWildcardServers(ctx, ing, gw, desiredWildcardServers); err != nil {
 				return err
 			}
 		}
@@ -303,6 +306,17 @@ func (r *Reconciler) reconcileIngressServers(ctx context.Context, ing *v1alpha1.
 		return fmt.Errorf("failed to get Gateway: %w", err)
 	}
 	existing := resources.GetServers(gateway, ing)
+	return r.reconcileGateway(ctx, ing, gateway, existing, desired)
+}
+
+func (r *Reconciler) reconcileWildcardServers(ctx context.Context, ing *v1alpha1.Ingress, gw config.Gateway, desired []*istiov1alpha3.Server) error {
+	gateway, err := r.gatewayLister.Gateways(gw.Namespace).Get(gw.Name)
+	if err != nil {
+		// Unlike VirtualService, a default gateway needs to be existent.
+		// It should be installed when installing Knative.
+		return fmt.Errorf("failed to get Gateway: %w", err)
+	}
+	existing := resources.GetExistingServers(gateway, desired)
 	return r.reconcileGateway(ctx, ing, gateway, existing, desired)
 }
 
